@@ -18,6 +18,13 @@ def chunk_read(location, start, stop):
     df = pd.read_hdf(location, 'df', start=start, stop=stop)
     return df
 
+
+def save(file):
+    filename = '/home/lydia/PycharmProjects/untitled/currently using/repeated_songs.h5'
+    file.to_hdf(filename, key='df', mode='w')
+    del file
+    
+
 ###################################################### EASY FUNCTIONS ######################################################
 # Makes a dictionary, where all the popular categories are represented by their own names, and the rest by an 'OTHER'
 def make_dict(good_list, bad_list):
@@ -149,8 +156,18 @@ warnings.filterwarnings('ignore')
 
 # The main algorithm starts
 print('Reading first....')
-path = '/home/lydia/PycharmProjects/untitled/currently using/songs_not_sorted.h5'
+path = '/home/lydia/PycharmProjects/untitled/currently using/songs.h5'
+train_path = '/home/lydia/PycharmProjects/untitled/old uses/train.h5'
+
+songs = file_read(songs_path)
+train = file_read(train_path)
+songs = songs[1:]
+songs = pd.merge(train, songs, how='left', on='song_id')
+songs = songs.drop_duplicates()
+
 manipulate(path)
+
+save(songs)
 
 # Prints how long did it take and it's done!
 final_time = time.time() - start_time
