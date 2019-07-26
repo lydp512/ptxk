@@ -1,7 +1,10 @@
+from sklearn.neural_network import MLPClassifier
 import pandas as pd
 import warnings
+import pickle
 
 
+############################################ SIMPLE READING/SAVING FUNCTIONS ###########################################
 def file_read(location):
     df = pd.read_hdf(location, 'df')
     return df
@@ -12,6 +15,24 @@ def chunk_read(location, start, stop):
     return df
 
 
+def file_save(file, filename):
+    file.to_hdf(filename, key='df', mode='w')
+    del file
+
+
+def save_list(file, filename):
+    with open(filename, "wb") as fp:
+        pickle.dump(file, fp)
+
+
+def read_list(filename):
+    with open(filename, "rb") as fp:
+        file = pickle.load(fp)
+    return file
+
+
+################################### NOT USED ATM, BUT ARE NEEDED FOR THE SONGS FILE ####################################
+# Look at github for comments
 def make_dict(good_list, bad_list):
     bad_list = bad_list[~bad_list.isin(good_list)].dropna()
     good_dict = {value: value for value in good_list}
@@ -50,77 +71,108 @@ def find_percentile(df):
     return list_of_dicts, list_of_names
 
 
+############################################### MAKES THE SONGS DUMMIES ###############################################
 def make_dummies(array, dict_for_map, names, column_name):
+    # NaN values aren't allowed, so they're filled as 'OTHER' (such subcategory exists in every category)
+    array = array.fillna('OTHER')
+    # Many artists can be found in a single line, seperated by "|". Split them.
     array = array.str.split(pat="|", expand=True)
+    # Maps the column. Every genre/artist/etc that's not on the top 95% of popularity gets masked as 'OTHER'
     for column in array:
         array[column] = array[column].map(dict_for_map)
-    array = array.astype('category', categories = names)
+    # Makes dummies
     array = pd.get_dummies(array.apply(pd.Series).stack(), prefix=column_name).sum(level=0)
+    # Creates more columns for dummy variables that are not available
+    array = array.T.reindex(names).T.fillna(0)
+    # Keeps them in alphabetical order, so that the columns aren't in random order each time
+    array = array.reindex(sorted(array.columns), axis=1)
     return array
 
 
-def manipulate_song(array, maping, listing, language_list, max_length):
-    song_length = array['song_length'].astype(float)
-    song_length = song_length.fillna(0)
-    # min length is 0
-    song_length = song_length.div(max_length)
-    languages = array['language']
-    languages = languages.astype('category', categories=language_list)
-    languages = pd.get_dummies(languages)
-    entire_file = array.drop(['song_length', 'language'], axis=1)
+###################################### PREPARES THE SONG ARRAY FOR THE ALGORITHM #######################################
+def manipulate_song(array, maping, listing, max_length):
+    # Song_length is appended as a string. Convert to float, so that normalization is possible
+    array['song_length'] = array['song_length'].astype(float)
+    # Some songs are not provided with a duration. Fill as 0
+    array['song_length'] = array['song_length'].fillna(0)
+    # Since minimum length is 0, simply divide by max length
+    array['song_length'] = array['song_length'].div(max_length)
+    # Get language dummies (no two languages appear in a single column,
+    # so the extra function is not needed for this column)
+    array['language'] = array['language'].T.reindex(listing[4]).T.fillna(0)
     column_list = ['genre_ids', 'artist_name', 'composer', 'lyricist']
-    entire_file = pd.concat([entire_file, song_length], axis=1)
     i = 0
+    # Makes dummies for each "more demanding" column
     for column in column_list:
-        column = make_dummies(entire_file[column], maping[i], listing[i], column)
-        entire_file = pd.concat([entire_file, column], axis=1)
+        column = make_dummies(array[column], maping[i], listing[i], column)
+        array = pd.concat([array, column], axis=1)
         i = i + 1
-    entire_file = pd.concat([entire_file, languages], axis=1)
-    entire_file = entire_file.drop(['genre_ids', 'artist_name', 'composer', 'lyricist'], axis=1)
-    return entire_file
-
-
-def manipulate_train(array, categories):
-    relevant_categories = ['source_system_tab', 'source_screen_name', 'source_type']
-    for i in range(3):
-        column = array[relevant_categories[i]].astype('category', categories=categories[i])
-        column = pd.get_dummies(column)
-        array = pd.concat([array,column], axis=1)
-    array = array.drop(relevant_categories, axis=1)
+    # Drops the original columns, since now they're replaced with the dummy columns
+    array = array.drop(['genre_ids', 'artist_name', 'composer', 'lyricist'], axis=1)
     return array
 
 
-def train_them(train, songs, maping, listing, language_list, max_length):
+###################################### PREPARES THE TRAIN ARRAY FOR THE ALGORITHM ######################################
+def manipulate_train(array, categories):
+    # Separates the target from the array
+    target = array['target']
+    array = array.drop(['target'],axis=1)
+    # These are the categories that need to get dummies
+    relevant_categories = ['source_system_tab', 'source_screen_name', 'source_type']
+    # Make the dummies happen
+    for i in range(3):
+        column = array[relevant_categories[i]]
+        column = pd.get_dummies(column, prefix=relevant_categories[i])
+        column = column.T.reindex(categories[i]).T.fillna(0)
+        array = pd.concat([array,column], axis=1)
+    # Drop the original columns, like before
+    array = array.drop(relevant_categories, axis=1)
+    return array, target
+
+
+###################################################### MERGES THEM #####################################################
+def train_with_songs(train, song):
+    # Rather simple. Gets rid of the ids, and then merges them together. Simple as.
+    song = song.drop(['song_id'],axis=1)
+    train = train.drop(['msno', 'song_id'],axis=1)
+    train = pd.concat([train,song],axis=1)
+    train = train.fillna(0)
+    return train
+
+
+##################################################### TRAINS THEM #####################################################
+def train_them(train, songs, maping, listing, max_length, categories):
     prev = 0
-    while prev + 1000 < 7377416:
-        new_song = manipulate_song(chunk_read(songs, prev, prev+1000), maping, listing, language_list, max_length)
-        new_train, target = manipulate_train(chunk_read(train, prev, prev+1000))
+    mlp = MLPClassifier(warm_start=True)
+    # Reads in 10k chunks
+    while prev + 10000 < 7377418:
+        # Takes care of the arrays first. Must be encoded, normalized and ready to go
+        new_song = manipulate_song(chunk_read(songs, prev, prev+10000), maping, listing, max_length)
+        new_train, target = manipulate_train(chunk_read(train, prev, prev+10000),categories)
         new_train = train_with_songs(new_train, new_song)
+        # Feeds them into the algorithm, it's good to go!
+        mlp.fit(new_train, target)
+        prev = prev + 10000
+    # Runs one last time. Same as before, it's just a smaller chunk now.
+    new_song = manipulate_song(chunk_read(songs, prev, 7377418), maping, listing, max_length)
+    new_train, target = manipulate_train(chunk_read(train, prev, 7377418), categories)
+    new_train = train_with_songs(new_train, new_song)
+    mlp.fit(new_train, target)
+    # Done with the fitting! Time to put it to the test!
 
 
 
 ############################################## MAIN STARTS HERE ################################################
 warnings.filterwarnings('ignore')
 
-prev=1
-train = '/home/lydia/PycharmProjects/untitled/old uses/train.h5'
-trains = file_read(train)
-categories = []
-for column in ['source_system_tab', 'source_screen_name', 'source_type']:
-    trains[column] = trains[column].fillna('Unknown')
-    categories.append(trains[column].unique())
-del trains
-new_train = manipulate_train(chunk_read(train, prev, prev+1000), categories)
-
-songs_path = '/home/lydia/PycharmProjects/untitled/currently using/repeated_songs.h5'
-songs = file_read(songs_path)
-songs = songs[1:]
-un_languages = songs['language'].unique()
-song_length = pd.to_numeric(songs['song_length'])
-max_song_length = song_length.max()
-max_song_length = float(max_song_length)
+# Simply reads the files
 train_path = '/home/lydia/PycharmProjects/untitled/old uses/train.h5'
-percentile_map, percentile_list = find_percentile(songs)
-del songs
+file_path = '/home/lydia/PycharmProjects/untitled/currently using/'
+songs_path = file_path + 'repeated_songs.h5'
+percentile_map = read_list(file_path + 'percentile_map.txt')
+categories = read_list(file_path + 'categories.txt')
+max_song_length = read_list(file_path + 'max_song_length.txt')
+percentile_list = read_list(file_path + 'percentile_list.txt')
 
-train_them(train_path, songs_path, percentile_map, percentile_list, un_languages, max_song_length)
+# All read and good. Ready to go!
+train_them(train_path, songs_path, percentile_map, percentile_list, max_song_length, categories)
