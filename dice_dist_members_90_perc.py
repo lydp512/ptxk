@@ -51,9 +51,10 @@ def count(array):
     return cn
 
 
-def find_percentile(df):
+def find_percentile(df, extra_df):
+    df = pd.concat([df, extra_df], axis=0)
     # Only two values require dice distance now
-    relevant_columns = ['city', 'registered_via']
+    relevant_columns = ['city','registered_via']
     dice = []
     # For every column, it saves the top10 quantile values with an 1, while the rest are saved with a 0
     for column in relevant_columns:
@@ -63,8 +64,11 @@ def find_percentile(df):
 
 ################################################### MAIN STARTS HERE ###################################################
 members_path = '/home/lydia/PycharmProjects/untitled/currently using/repeated_members.h5'
-members = file_read(members_path)
+member_path_test = '/home/lydia/PycharmProjects/untitled/currently using/repeated_members_test.h5'
+
+train = file_read(members_path)
+test = file_read(member_path_test)
 # Does magic! (not really)
-list_of_dice = find_percentile(members)
+list_of_dice = find_percentile(train, test)
 # Saves and done!
 save_list(list_of_dice, 'dice_dist_members_list_90.txt')
