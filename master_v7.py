@@ -81,7 +81,8 @@ def find_min_and_max(time, imerominia):
 
 def age(array):
     array = array.where(array < 18, 18)
-    array = array.where(array > 80, 23)
+    # This is because, statistically, younger people are more likely to use false, old ages.
+    array = array.where(array > 85, 18)
     return array
 
 
@@ -107,6 +108,14 @@ def date_for_members(array, min_year, max_year):
     return year, month, day
 
 
+def replace_gender(array):
+    array = array.str.upper()
+    unique_vals = list(set(array.unique()) - set(['MALE', 'FEMALE']))
+    array = array.replace({'MALE': 1, 'FEMALE': 0})
+    array = array.replace(unique_vals, 0.5)
+    return array
+
+
 ############################################### MAKES THE SONGS DUMMIES ###############################################
 def make_dummies(array, names, column_name):
     # NaN values aren't allowed, so they're filled as 'OTHER' (such subcategory exists in every category)
@@ -123,12 +132,32 @@ def make_dummies(array, names, column_name):
 
 
 ############################################### CALCULATE THE DISTANCES ################################################
+# HUGE amounts of RAM are saved, compared to just using the regular sklearn dice distance to start with, due to weeding
+# out the true negatives before continuing.
+def calc_dist(main_array, pop_values):
+    # First, the true negatives are disregarded from the calculation
+    columns_to_be_dropped = list(pop_values.loc[:, (pop_values == 0).all()].columns)
+    # Since only values which exist at least once, are implemented in the main array, it means that the corresponding
+    # list would include all the column names. Therefore, a simple list of all column names is enough.
+    non_zero_lines = list(main_array.columns)
+    columns_to_be_dropped = list(set(columns_to_be_dropped) - set(non_zero_lines))
+    pop_values = pop_values.drop(columns=columns_to_be_dropped)
+    # Now, append zeros in the main array, since it corresponds to non-zero values in the pop_values(basically what is
+    # done, is to append the false negatives. Also, it reindexes the dataframe, to correspond to the pop_values values.
+    main_array = main_array.T.reindex(list(pop_values.columns)).T.fillna(0)
+    dist = DistanceMetric.get_metric('dice')
+    # All good to go. Counts the distance, squeezes it back to a pandas Series, and it's all done!
+    dist = dist.pairwise(main_array, pop_values)
+    dist = pd.Series(np.squeeze(dist))
+    return dist
+
+
 def dice_distance(array, column, pop):
     array = array.fillna('UNKNOWN')
-    if column == 'language':
+    # The excluded columns have at least one separator, and therefore, must be treated differently
+    if column != 'genre_ids' and column != 'artist_name' and column != 'composer' and column != 'lyricist':
         array = pd.get_dummies(array)
-        array = array.T.reindex(list(pop.columns)).T.fillna(0)
-        array = array.reindex(sorted(array.columns), axis=1)
+        dist = calc_dist(array, pop)
     else:
         # Genre_ids should be treated differently than the other columns, since it only has numerical values (with the
         # exception of 'UNKNOWN', but this is an input given by the program)
@@ -154,26 +183,19 @@ def dice_distance(array, column, pop):
                 array[new_col] = array[new_col].str.upper()
                 array[new_col] = array[new_col].str.replace(r'\b\w\b', '').str.replace(r'\s+', ' ')
                 array[new_col] = array[new_col].str.strip()
-                #array = array[array.apply(lambda x: len(x) >= 2)]
-                array[new_col] = array[new_col].apply(lambda x: np.NaN if (len(str(x)) < 2) else x)
-                ASFASDFASDFSDFASDFASF
-                MEMORY ERROR 
-            array = array.stack().str.get_dummies().sum(level=0)
-            print(array)
-            # array = pd.get_dummies(array.apply(pd.Series).stack()).sum(level=0)
-            # Creates more columns for dummy variables that are not available
-            array = array.T.reindex(list(pop.columns)).T.fillna(0)
-            array = array.reindex(sorted(array.columns), axis=1)
+                array[new_col] = array[new_col].apply(lambda x: None if (len(str(x)) < 2) else x)
+            array = pd.get_dummies(array.stack()).sum(level=0)
+            # During the dummy process, some columns that lack a value, get deleted completely.
+            # The following line of code, makes sure to restore them.
+            array = array.reindex(list(range(array.index.min(), array.index.max()+1)), fill_value=0)
+            # No need to merge the arrays already. We need to weed out the true negatives first, since dice distance
+            # is used. It is not only more memory and time efficient to not merge them yet, but the solution appears
+            # much more clean as well.
+            dist = calc_dist(array, pop)
         else:
             array = pd.get_dummies(array.apply(pd.Series).stack()).sum(level=0)
             # Creates more columns for dummy variables that are not available
-            array = array.T.reindex(list(pop.columns)).T.fillna(0)
-            array = array.reindex(sorted(array.columns), axis=1)
-
-    dist = DistanceMetric.get_metric('dice')
-    dist = dist.pairwise(array, pop)
-    dist = pd.Series(np.squeeze(dist))
-    print(dist)
+            dist = calc_dist(array, pop)
     return dist
 
 
@@ -188,74 +210,107 @@ def manipulate_song(array, dice, max_len):
     array['song_length'] = array['song_length'].div(max_len)
 
     # Now the dice distance must be calculated
-    column_list = ['artist_name', 'composer', 'lyricist', 'language']
-    #'genre_ids',
+    column_list = ['genre_ids', 'artist_name', 'composer', 'lyricist', 'language']
     i = 0
     for column in column_list:
-        array[column] = dice_distance(array[column], column, dice[1])
+        array[column] = dice_distance(array[column], column, dice[i])
         i = i+1
-    print(array, array.shape, list(array.columns))
     # Done! Return new array and continue.
     return array
 
 
+def manipulate_member(array, dice_list, minT, maxT, minY, maxY):
+
+    # Convert to dice
+    array['city'] = dice_distance(array['city'], 'city', dice_list[0])
+    array['registered_via'] = dice_distance((array['registered_via']), 'registered_via', dice_list[1])
+
+    # Weed out possible fake values
+    array['bd'] = age(array['bd'])
+
+    # Converts male to 1, female to 0, and unknown/other to 0.5
+    array['gender'] = replace_gender(array['gender'])
+
+    # Normalizes time
+    array['registration_init_time'] = array['registration_init_time'] - minT / maxT - minT
+
+    # Normalizes dates
+    array['year'], array['month'], array['day'] = date_for_members(array['expiration_date'], minY, maxY)
+    array = array.drop(['expiration_date'], axis=1)
+
+    return array
+
+
+def manipulate_train(array, song, member, dice):
+    i = 0
+    relevant_columns = ['source_system_tab', 'source_screen_name', 'source_type']
+    for column in relevant_columns:
+        array[column] = dice_distance(array[column], column, dice[i])
+    target = array['target']
+    array = pd.concat([array, song, member], axis=1)
+    array = array.drop(['target', 'msno', 'song_id'], axis=1)
+    return array, target
+
+
 ###################################### PREPARES THE SONG ARRAY FOR THE ALGORITHM #######################################
-def train(song, member, train, dice_song, dice_member):
-    #member_entire = file_read(member)
+def train(song_path, member_path, train_path, dice_song, dice_member, dice_train):
     # ['song_id', 'song_length', 'genre_ids', 'artist_name', 'composer', 'lyricist', 'language'] song
     # ['msno', 'city', 'bd', 'gender', 'registered_via', 'registration_init_time', 'expiration_date'] member
     # ['msno', 'song_id', 'source_system_tab', 'source_screen_name', 'source_type', 'target'] train
     dice_song = read_list(dice_song)
-    for array in dice_song:
-        array = array.reindex(sorted(array.columns), axis=1)
     dice_member = read_list(dice_member)
-    for array in dice_member:
-        array = array.reindex(sorted(array.columns), axis=1)
-    prev = 0
-    i = 0
+    dice_train = read_list(dice_train)
     mlp = MLPClassifier(learning_rate='adaptive', warm_start=True)
-    #min_time, max_time, min_year, max_year = find_min_and_max(member_entire['registration_init_time'],
-                                                              #member_entire['expiration_date'])
-    #del member_entire
-    #max_song_length = file_read(songs_path)['song_length'][1:].astype(float).max()
+    member_entire = file_read(member_path)
+    min_time, max_time, min_year, max_year = find_min_and_max(member_entire['registration_init_time'],
+                                                              member_entire['expiration_date'])
+    del member_entire
     max_song_length = 4145345
-    # Reads in 10k chunks
-    # 400000 einai to max
+    # Reads in 20k chunks
     prev = 0
-    while prev + 20000 < 7377418:
-        song = manipulate_song(chunk_read(song, prev, prev+20000), dice_song, max_song_length)
-        train_chunk = chunk_read(train, prev, prev+20000)
-    chunk = chunk_read(songs_path, prev, prev + 1000)
-
-
-
-    language = pd.get_dummies(chunk['language'])
-    language = language.T.reindex(unique[4]).T.fillna(0)
-    language.columns = ['language_' + str(col) for col in language.columns]
-    language = language.reindex(sorted(language.columns), axis=1)
-    language = dice_distance(language, perc_list[4], unique[4])
-    chunk['language'] = language
-
-    column_list = ['genre_ids', 'artist_name', 'composer', 'lyricist']
-    # Makes dummies for each "more demanding" column
     i = 0
-    for column in column_list:
-        new_col = make_dummies(chunk[column], unique[i], column)
-        new_col = dice_distance(new_col, perc_list[i], unique[i])
-        chunk[column] = new_col
-        i = i + 1
-    print(chunk)
-    asdf
+    while prev + 20000 < 7377418:
+        song_chunk = manipulate_song(chunk_read(song_path, prev, prev+20000), dice_song, max_song_length)
+        member_chunk = manipulate_member(chunk_read(member_path, prev, prev+20000), dice_member, min_time, max_time,
+                                         min_year, max_year)
+        train_chunk, target = manipulate_train(chunk_read(train_path, prev, prev+20000), song_chunk,
+                                               member_chunk, dice_train)
 
-    return array
+        mlp.fit(train_chunk, target)
+        prev = prev + 20000
+    # Runs one final time
+    song_chunk = manipulate_song(chunk_read(song_path, prev, 7377418), dice_song, max_song_length)
+    member_chunk = manipulate_member(chunk_read(member_path, prev, 7377418), dice_member, min_time, max_time,
+                                     min_year, max_year)
+    train_chunk, target = manipulate_train(chunk_read(train_path, prev, 7377418), song_chunk,
+                                           member_chunk, dice_train)
+    mlp.fit(train_chunk, target)
+
+    # Time to test the algorithm!
+    test(mlp, dice_song, dice_member, dice_train, max_song_length, min_time, max_time, min_year, max_year)
+
+
+def test(mlp, dice_song, dice_member, dice_train, max_song_length, min_time, max_time, min_year, max_year):
+    test_path = '/home/lydia/PycharmProjects/untitled/currently using/test_with_target.h5'
+    song_path = '/home/lydia/PycharmProjects/untitled/currently using/repeated_songs_test.h5'
+    member_path = '/home/lydia/PycharmProjects/untitled/currently using/repeated_members_test.h5'
+
+    prev = 30000
+    while prev + 30000 < 2556790:
+        song_chunk = manipulate_song(chunk_read(song_path, prev, prev + 20000), dice_song, max_song_length)
+        member_chunk = manipulate_member(chunk_read(member_path, prev, prev + 20000), dice_member, min_time, max_time,
+                                         min_year, max_year)
+        train_chunk, target = manipulate_test(chunk_read(test_path, prev, prev + 20000), song_chunk,
+                                               member_chunk, dice_train)
+
 
 warnings.filterwarnings('ignore')
 songs_path = '/home/lydia/PycharmProjects/untitled/currently using/repeated_songs.h5'
 members_path = '/home/lydia/PycharmProjects/untitled/currently using/repeated_members.h5'
 train_path = '/home/lydia/PycharmProjects/untitled/old uses/train.h5'
-test_path = '/home/lydia/PycharmProjects/untitled/currently using/test_with_target.h5'
 songs_dice_path = '/home/lydia/PycharmProjects/untitled/python files/dice_dist_songs_list_90.txt'
 members_dice_path = '/home/lydia/PycharmProjects/untitled/python files/dice_dist_members_list_90.txt'
+train_dice_path = '/home/lydia/PycharmProjects/untitled/python files/dice_dist_train_list_90.txt'
 
 
-train(songs_path, members_path, train_path, songs_dice_path, members_dice_path)
+train(songs_path, members_path, train_path, songs_dice_path, members_dice_path, train_dice_path)
