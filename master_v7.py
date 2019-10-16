@@ -1,5 +1,5 @@
 from sklearn.neighbors.dist_metrics import DistanceMetric
-from sklearn.cluster import DBSCAN
+from sklearn.neural_network import MLPClassifier
 import pandas as pd
 import numpy as np
 import warnings
@@ -9,12 +9,14 @@ import sys
 
 
 ############################################ SIMPLE READING/SAVING FUNCTIONS ###########################################
-from sklearn.neural_network import MLPClassifier
-
-
 def file_read(location):
     df = pd.read_hdf(location, 'df')
     return df
+
+
+def file_save(file, filename):
+    file.to_hdf(filename, key='df', mode='a')
+    del file
 
 
 def chunk_read(location, start, stop):
@@ -33,45 +35,10 @@ def save_list(file, filename):
         pickle.dump(file, fp)
 
 
-def chunk_read(location, start, stop):
-    df = pd.read_hdf(location, 'df', start=start, stop=stop)
-    return df
-
-
 #################################################### SIMPLE FUNCTIONS ##################################################
-def find_unique_songs(array):
-    un = []
-    array = array[1:]
-    array['song_length'] = array['song_length'].astype(float)
-    max_song_length = array['song_length'].max()
-    array = array.drop(['song_id', 'song_length'], axis=1)
-    for column in array:
-        if column!='language':
-            new = array[column].str.split(pat="|", expand=True)
-            total = pd.DataFrame()
-            for extra_column in new:
-                add = new[extra_column].value_counts()
-                if total.empty:
-                    total = add
-                    total_genre = pd.Series(new[extra_column].unique())
-                else:
-                    total = pd.concat([total, add], axis=1)
-                    unique = pd.Series(new[extra_column].unique())
-                    unique = unique[~unique.isin(total_genre)].dropna()
-                    total_genre.append(unique)
-            total_genre = total_genre.dropna()
-            un.append(total_genre)
-        else:
-            total = array[column].unique()
-            total = pd.Series(total)
-            total = total.dropna()
-            un.append(total)
-    return un, max_song_length
-
-
-def find_min_and_max(time, imerominia):
-    min_time = time.min()
-    max_time = time.max()
+def find_min_and_max(wra, imerominia):
+    min_time = wra.min()
+    max_time = wra.max()
     # year month day format
     year, month, day = date(imerominia)
     min_year = year.min()
@@ -110,25 +77,42 @@ def date_for_members(array, min_year, max_year):
 
 def replace_gender(array):
     array = array.str.upper()
+    # Any values that are not Male or Female are categorized as 0.5
     unique_vals = list(set(array.unique()) - set(['MALE', 'FEMALE']))
     array = array.replace({'MALE': 1, 'FEMALE': 0})
     array = array.replace(unique_vals, 0.5)
     return array
 
 
-############################################### MAKES THE SONGS DUMMIES ###############################################
-def make_dummies(array, names, column_name):
-    # NaN values aren't allowed, so they're filled as 'OTHER' (such subcategory exists in every category)
-    array = array.fillna(0)
-    # Many artists can be found in a single line, seperated by "|". Split them.
-    array = array.str.split(pat="|", expand=True)
-    array = pd.get_dummies(array.apply(pd.Series).stack()).sum(level=0)
-    # Creates more columns for dummy variables that are not available
-    array = array.T.reindex(names).T.fillna(0)
-    array.columns = [column_name + '_' + str(col) for col in array.columns]
-    # Keeps them in alphabetical order, so that the columns aren't in random order each time
-    array = array.reindex(sorted(array.columns), axis=1)
-    return array
+def correct(prediction, true_values):
+    check = np.equal(prediction, true_values)
+    check = np.sum(check)
+    check = (check*100)/len(prediction)
+    return check
+
+
+def loading_bar(i):
+    if i == 0:
+        i = '0%'
+    else:
+        i = (i*2000000)//7377418
+        i = (i//4)*'█' + " " + str(i) + "%"
+    time.sleep(1)
+    sys.stdout.write('\r' + i)
+    sys.stdout.flush()
+
+
+def loading_bar_test(i, score):
+    if i == 0:
+        time.sleep(1)
+        sys.stdout.write(' 0%')
+        sys.stdout.flush()
+    else:
+        i = (i*2000000)//2556789
+        i = (i//4)*'█' + " " + str(i) + "%"
+        time.sleep(1)
+        sys.stdout.write('\r' + i + ' While the score is ' + str(score) + " %")
+        sys.stdout.flush()
 
 
 ############################################### CALCULATE THE DISTANCES ################################################
@@ -241,7 +225,7 @@ def manipulate_member(array, dice_list, minT, maxT, minY, maxY):
     return array
 
 
-def manipulate_train(array, song, member, dice):
+def manipulate_t(array, song, member, dice):
     i = 0
     relevant_columns = ['source_system_tab', 'source_screen_name', 'source_type']
     for column in relevant_columns:
@@ -270,19 +254,21 @@ def train(song_path, member_path, train_path, dice_song, dice_member, dice_train
     prev = 0
     i = 0
     while prev + 20000 < 7377418:
+        loading_bar(i)
         song_chunk = manipulate_song(chunk_read(song_path, prev, prev+20000), dice_song, max_song_length)
         member_chunk = manipulate_member(chunk_read(member_path, prev, prev+20000), dice_member, min_time, max_time,
                                          min_year, max_year)
-        train_chunk, target = manipulate_train(chunk_read(train_path, prev, prev+20000), song_chunk,
+        train_chunk, target = manipulate_t(chunk_read(train_path, prev, prev+20000), song_chunk,
                                                member_chunk, dice_train)
-
+        # kapou exei NaN, ftiax'to
         mlp.fit(train_chunk, target)
+        test(mlp, dice_song, dice_member, dice_train, max_song_length, min_time, max_time, min_year, max_year)
         prev = prev + 20000
     # Runs one final time
     song_chunk = manipulate_song(chunk_read(song_path, prev, 7377418), dice_song, max_song_length)
     member_chunk = manipulate_member(chunk_read(member_path, prev, 7377418), dice_member, min_time, max_time,
                                      min_year, max_year)
-    train_chunk, target = manipulate_train(chunk_read(train_path, prev, 7377418), song_chunk,
+    train_chunk, target = manipulate_t(chunk_read(train_path, prev, 7377418), song_chunk,
                                            member_chunk, dice_train)
     mlp.fit(train_chunk, target)
 
@@ -291,17 +277,48 @@ def train(song_path, member_path, train_path, dice_song, dice_member, dice_train
 
 
 def test(mlp, dice_song, dice_member, dice_train, max_song_length, min_time, max_time, min_year, max_year):
+    # ['id', 'msno', 'song_id', 'source_system_tab', 'source_screen_name', 'source_type', 'target'] test
     test_path = '/home/lydia/PycharmProjects/untitled/currently using/test_with_target.h5'
     song_path = '/home/lydia/PycharmProjects/untitled/currently using/repeated_songs_test.h5'
     member_path = '/home/lydia/PycharmProjects/untitled/currently using/repeated_members_test.h5'
 
-    prev = 30000
-    while prev + 30000 < 2556790:
+    prev = 0
+    i = 0
+    while prev + 20000 < 2556790:
         song_chunk = manipulate_song(chunk_read(song_path, prev, prev + 20000), dice_song, max_song_length)
         member_chunk = manipulate_member(chunk_read(member_path, prev, prev + 20000), dice_member, min_time, max_time,
                                          min_year, max_year)
-        train_chunk, target = manipulate_test(chunk_read(test_path, prev, prev + 20000), song_chunk,
+        test_chunk, target = manipulate_t(chunk_read(test_path, prev, prev + 20000), song_chunk,
                                                member_chunk, dice_train)
+        test_chunk = test_chunk.drop(['id'], axis=1)
+        target = target.reset_index(drop=True)
+        nan_index = target[target.apply(np.isnan)]
+        nan_index = nan_index.index.tolist()
+        target = target.dropna()
+        prediction = mlp.predict(test_chunk)
+        prediction = np.delete(prediction, nan_index)
+        score = correct(prediction, target)
+        prediction = pd.DataFrame(prediction)
+        file_save(prediction, 'Score_v7.h5')
+        prev = prev + 20000
+        loading_bar_test(i, score)
+        i = i + 1
+    song_chunk = manipulate_song(chunk_read(song_path, prev, 2556790), dice_song, max_song_length)
+    member_chunk = manipulate_member(chunk_read(member_path, prev, 2556790), dice_member, min_time, max_time,
+                                     min_year, max_year)
+    test_chunk, target = manipulate_t(chunk_read(test_path, prev, 2556790), song_chunk,
+                                      member_chunk, dice_train)
+    test_chunk = test_chunk.drop(['id'], axis=1)
+    target = target.reset_index(drop=True)
+    nan_index = target[target.apply(np.isnan)]
+    nan_index = nan_index.index.tolist()
+    target = target.dropna()
+    prediction = mlp.predict(test_chunk)
+    prediction = np.delete(prediction, nan_index)
+    score = correct(prediction, target)
+    prediction = pd.DataFrame(prediction)
+    #file_save(prediction, 'Score_v7.h5')
+    loading_bar_test(i, score)
 
 
 warnings.filterwarnings('ignore')
