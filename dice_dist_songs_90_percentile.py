@@ -64,13 +64,13 @@ def count(array, column):
             # artist appears in the dataframe, the data must be split.
             # Unfortunately, simply using "|" as a separator, isn't sufficient.
             # There are many different ways in which data are separated with, that's why all those possible separators
-            # are included. This, however, leads to some more problems. Bands or artists that have any of these 
+            # are included. This, however, leads to some more problems. Bands or artists that have any of these
             # separators in their name, have their name split (e.g. AC/DC). The gain of splitting them up, however, is
             # greater than the loss. So a few names, are indeed, sacrificed.
             array = array.str.split(pat=r'and|AND|And|\t|[1234567890()`、/\'\-=~!@#$%^&*+\[\]{};:"|<,.<>?\\\\]',
                                     expand=True)
         total = pd.DataFrame()
-        # After the column is split to multiple columns, we count values for each and every one of them. 
+        # After the column is split to multiple columns, we count values for each and every one of them.
         # Then, we simply sum them up.
         for extra_column in array:
             add = array[extra_column].value_counts()
@@ -109,7 +109,8 @@ def count(array, column):
     return cn
 
 
-def find_percentile(df):
+def find_percentile(df, test_df):
+    df = pd.concat([df, test_df], axis=0, ignore_index=True)
     # Not every column in the songs file is needed to calculate dice distance.
     # For example, values such as song_length exist, which is much easier to normalize
     relevant_columns = ['genre_ids', 'artist_name', 'composer', 'lyricist', 'language']
@@ -122,10 +123,10 @@ def find_percentile(df):
 
 ################################################### MAIN STARTS HERE ###################################################
 songs_path = '/home/lydia/PycharmProjects/untitled/currently using/repeated_songs.h5'
+songs_test_path = '/home/lydia/PycharmProjects/untitled/currently using/repeated_songs_test.h5'
 songs = file_read(songs_path)
-# First row is just the header, so it's skipped
-songs = songs[1:]
+songs_test = file_read(songs_test_path)
 # Does magic! (not really)
-list_of_dice = find_percentile(songs)
+list_of_dice = find_percentile(songs, songs_test)
 # Saves and done!
 save_list(list_of_dice, 'dice_dist_list_90.txt')
