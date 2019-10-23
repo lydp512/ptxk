@@ -91,25 +91,26 @@ def correct(prediction, true_values):
     return check
 
 
-def loading_bar(i):
+def loading_bar(i, total):
     if i == 0:
         i = '0%'
     else:
         i = (i*2000000)//7377418
-        i = (i//4)*'█' + " " + str(i) + "%"
+        i = (i//4)*'█' + " " + str(i) + "%."
+        i = i + ' Total time that passed training the model is: ' + total
     time.sleep(1)
     sys.stdout.write('\r' + i)
     sys.stdout.flush()
 
 
-def loading_bar_test(i, score):
+def loading_bar_test(i, total, score):
     if i == 0:
         time.sleep(1)
         sys.stdout.write(' 0%')
         sys.stdout.flush()
     else:
         i = (i*2000000)//2556789
-        i = (i//4)*'█' + " " + str(i) + "%"
+        i = (i//4)*'█' + " " + str(i) + "%. Total time that passed testing the model is: " + total
         time.sleep(1)
         sys.stdout.write('\r' + i + ' While the score is ' + str(score) + " %")
         sys.stdout.flush()
@@ -253,17 +254,20 @@ def train(song_path, member_path, train_path, dice_song, dice_member, dice_train
     # Reads in 20k chunks
     prev = 0
     i = 0
-    while prev + 20000 < 7377418:
-        loading_bar(i)
-        song_chunk = manipulate_song(chunk_read(song_path, prev, prev+20000), dice_song, max_song_length)
-        member_chunk = manipulate_member(chunk_read(member_path, prev, prev+20000), dice_member, min_time, max_time,
+    start = time.time()
+    total_time = 0.0
+    while prev + 30000 < 7377418:
+        loading_bar(i, total_time)
+        song_chunk = manipulate_song(chunk_read(song_path, prev, prev+30000), dice_song, max_song_length)
+        member_chunk = manipulate_member(chunk_read(member_path, prev, prev+30000), dice_member, min_time, max_time,
                                          min_year, max_year)
-        train_chunk, target = manipulate_t(chunk_read(train_path, prev, prev+20000), song_chunk,
+        train_chunk, target = manipulate_t(chunk_read(train_path, prev, prev+30000), song_chunk,
                                                member_chunk, dice_train)
         # kapou exei NaN, ftiax'to
         mlp.fit(train_chunk, target)
+        total_time = time.time() - start
         test(mlp, dice_song, dice_member, dice_train, max_song_length, min_time, max_time, min_year, max_year)
-        prev = prev + 20000
+        prev = prev + 30000
     # Runs one final time
     song_chunk = manipulate_song(chunk_read(song_path, prev, 7377418), dice_song, max_song_length)
     member_chunk = manipulate_member(chunk_read(member_path, prev, 7377418), dice_member, min_time, max_time,
@@ -284,24 +288,28 @@ def test(mlp, dice_song, dice_member, dice_train, max_song_length, min_time, max
 
     prev = 0
     i = 0
-    while prev + 20000 < 2556790:
-        song_chunk = manipulate_song(chunk_read(song_path, prev, prev + 20000), dice_song, max_song_length)
-        member_chunk = manipulate_member(chunk_read(member_path, prev, prev + 20000), dice_member, min_time, max_time,
+    start_time = time.time()
+    while prev + 30000 < 2556790:
+        song_chunk = manipulate_song(chunk_read(song_path, prev, prev + 30000), dice_song, max_song_length)
+        member_chunk = manipulate_member(chunk_read(member_path, prev, prev + 30000), dice_member, min_time, max_time,
                                          min_year, max_year)
-        test_chunk, target = manipulate_t(chunk_read(test_path, prev, prev + 20000), song_chunk,
+        test_chunk, target = manipulate_t(chunk_read(test_path, prev, prev + 30000), song_chunk,
                                                member_chunk, dice_train)
         test_chunk = test_chunk.drop(['id'], axis=1)
         target = target.reset_index(drop=True)
         nan_index = target[target.apply(np.isnan)]
         nan_index = nan_index.index.tolist()
         target = target.dropna()
+        print(test_chunk[test_chunk.isna().any(axis=1)])
         prediction = mlp.predict(test_chunk)
         prediction = np.delete(prediction, nan_index)
         score = correct(prediction, target)
         prediction = pd.DataFrame(prediction)
-        file_save(prediction, 'Score_v7.h5')
-        prev = prev + 20000
-        loading_bar_test(i, score)
+        #file_save(prediction, 'Score_v7.h5')
+        prev = prev + 30000
+        total_time = time.time() - start_time
+        print(score)
+        loading_bar_test(i, total_time, score)
         i = i + 1
     song_chunk = manipulate_song(chunk_read(song_path, prev, 2556790), dice_song, max_song_length)
     member_chunk = manipulate_member(chunk_read(member_path, prev, 2556790), dice_member, min_time, max_time,
@@ -318,7 +326,7 @@ def test(mlp, dice_song, dice_member, dice_train, max_song_length, min_time, max
     score = correct(prediction, target)
     prediction = pd.DataFrame(prediction)
     #file_save(prediction, 'Score_v7.h5')
-    loading_bar_test(i, score)
+    loading_bar_test(i, total_time, score)
 
 
 warnings.filterwarnings('ignore')
