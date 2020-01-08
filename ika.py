@@ -19,7 +19,7 @@ def chunk_read(location, start, stop):
 
 
 def file_save(file, filename):
-    file.to_hdf(filename, key='df', mode='w')
+    file.to_hdf(filename, key='df', mode='a')
     del file
 
 
@@ -130,7 +130,7 @@ def loading_bar(i):
     if i == 0:
         i = '0%'
     else:
-        i = (i*1000000)//7377418
+        i = (i*2000000)//7377418
         i = (i//4)*'█' + " " + str(i) + "%"
     time.sleep(1)
     sys.stdout.write('\r' + i)
@@ -143,7 +143,7 @@ def loading_bar_test(i, score):
         sys.stdout.write(' 0%')
         sys.stdout.flush()
     else:
-        i = (i*1000000)//2556789
+        i = (i*2000000)//2556789
         i = (i//4)*'█' + " " + str(i) + "%"
         time.sleep(1)
         sys.stdout.write('\r' + i + ' While the score is ' + str(score) + " %")
@@ -187,10 +187,11 @@ def manipulate_song(array, maping, listing, max_length):
     column_list = ['genre_ids', 'artist_name', 'composer', 'lyricist']
     i = 0
     # Makes dummies for each "more demanding" column
-    for column in column_list:
+    '''for column in column_list:
         column = make_dummies(array[column], maping[i], listing[i], column)
         array = pd.concat([array, column], axis=1)
-        i = i + 1
+        i = i + 1'''
+    column = make_dummies(array['genre_ids'], maping[0], listing[0], 'genre_ids')
     # Drops the original columns, since now they're replaced with the dummy columns
     array = pd.concat([array, language], axis=1)
     array = array.drop(['genre_ids', 'artist_name', 'composer', 'lyricist'], axis=1)
@@ -199,7 +200,7 @@ def manipulate_song(array, maping, listing, max_length):
 
 def manipulate_member(array, cities, registration, min_time, max_time, min_year, max_year):
     #['msno', 'city', 'bd', 'gender', 'registered_via', 'registration_init_time', 'expiration_date']
-    city = pd.get_dummies(array['city'])
+    '''city = pd.get_dummies(array['city'])
     city = city.T.reindex(cities).T.fillna(0)
     city.columns = ['city_' + str(col) for col in city.columns]
     city = city.reindex(sorted(city.columns), axis=1)
@@ -207,7 +208,7 @@ def manipulate_member(array, cities, registration, min_time, max_time, min_year,
     registered = pd.get_dummies(array['registered_via'])
     registered = registered.T.reindex(registration).T.fillna(0)
     registered.columns = ['registered_via_' + str(col) for col in registered.columns]
-    registered = registered.reindex(sorted(registered.columns), axis=1)
+    registered = registered.reindex(sorted(registered.columns), axis=1)'''
 
     gender = pd.get_dummies(array['gender'])
     gender.columns = ['gender_' + str(col) for col in gender.columns]
@@ -218,9 +219,9 @@ def manipulate_member(array, cities, registration, min_time, max_time, min_year,
     array['registration_init_time'] = array['registration_init_time']-min_time/max_time - min_time
 
     array = array.drop(['city', 'gender', 'registered_via'], axis=1)
-    array = pd.concat([array, city], axis=1)
+    # array = pd.concat([array, city], axis=1)
     array = pd.concat([array, gender], axis=1)
-    array = pd.concat([array, registered], axis=1)
+    # array = pd.concat([array, registered], axis=1)
 
     array['year'], array['month'], array['day'] = date_for_members(array['expiration_date'], min_year, max_year)
     array = array.drop(['expiration_date'], axis=1)
@@ -234,14 +235,14 @@ def manipulate_train(array, categories):
     array = array.drop(['target'],axis=1)
     # These are the categories that need to get dummies
     relevant_categories = ['source_system_tab', 'source_screen_name', 'source_type']
-    # Make the dummies happen
+    '''# Make the dummies happen
     for i in range(3):
         column = array[relevant_categories[i]]
         column = pd.get_dummies(column)
         column = column.T.reindex(categories[i]).T.fillna(0)
         column.columns = [relevant_categories[i] + '_' + str(col) for col in column.columns]
         column = column.reindex(sorted(column.columns), axis=1)
-        array = pd.concat([array,column], axis=1)
+        array = pd.concat([array,column], axis=1)'''
     # Drop the original columns, like before
     array = array.drop(relevant_categories, axis=1)
     return array, target
@@ -263,31 +264,33 @@ def implement(array, song, members):
 def train_them(train, members, songs, maping, listing, max_length, categories):
     prev = 0
     i = 0
-    mlp = MLPClassifier(warm_start=True)
+    mlp = MLPClassifier(learning_rate='adaptive', warm_start=True)
     entire_members = file_read(members)
     city_list, registration_list = find_lists(entire_members)
     min_time, max_time, min_year, max_year = find_min_and_max(entire_members['registration_init_time'],
                                                               entire_members['expiration_date'])
     # Reads in 10k chunks
     # 400000 einai to max
-    while prev + 10000 < 7377418:
+    while prev + 200000 < 7377418:
         loading_bar(i)
         # Takes care of the arrays first. Must be encoded, normalized and ready to go
-        new_member = manipulate_member(chunk_read(members, prev, prev + 10000),city_list,registration_list,
+        new_member = manipulate_member(chunk_read(members, prev, prev + 20000),city_list,registration_list,
                                        min_time,max_time,min_year,max_year)
-        new_song = manipulate_song(chunk_read(songs, prev, prev+10000), maping, listing, max_length)
-        new_train, target = manipulate_train(chunk_read(train, prev, prev+10000),categories)
+        new_song = manipulate_song(chunk_read(songs, prev, prev+20000), maping, listing, max_length)
+        new_train, target = manipulate_train(chunk_read(train, prev, prev+20000),categories)
         new_train = implement(new_train, new_song, new_member)
         # Feeds them into the algorithm, it's good to go!
         mlp.fit(new_train, target)
-        prev = prev + 10000
+        prev = prev + 20000
         i = i + 1
     # Runs one last time. Same as before, it's just a smaller chunk now.
+    new_member = manipulate_member(chunk_read(members, prev, 7377418), city_list, registration_list,
+                                   min_time, max_time, min_year, max_year)
     new_song = manipulate_song(chunk_read(songs, prev, 7377418), maping, listing, max_length)
     new_train, target = manipulate_train(chunk_read(train, prev, 7377418), categories)
-    new_train = implement(new_train, new_song)
+    new_train = implement(new_train, new_song, new_member)
     mlp.fit(new_train, target)
-    loading_bar(7377418, 7377418)
+    loading_bar(i)
     print('\n')
     test_them(mlp, maping, listing, max_length, categories, city_list, registration_list,
               min_time, max_time, min_year, max_year)
@@ -301,11 +304,11 @@ def test_them(mlp, maping, listing, max_length, categories, city_list, registrat
     test_members_path = '/home/lydia/PycharmProjects/untitled/currently using/repeated_members_test.h5'
     prev = 0
     i = 0
-    while prev+10000 < 2556789:
-        test_members = manipulate_member(chunk_read(test_members_path, prev, prev+10000), city_list, registration_list,
+    while prev+20000 < 2556789:
+        test_members = manipulate_member(chunk_read(test_members_path, prev, prev+20000), city_list, registration_list,
                                          min_time, max_time, min_year, max_year)
-        test_song = manipulate_song(chunk_read(test_songs_path,prev,prev+10000), maping, listing, max_length)
-        test, target = manipulate_train(chunk_read(test_path,prev,prev+10000), categories)
+        test_song = manipulate_song(chunk_read(test_songs_path,prev,prev+20000), maping, listing, max_length)
+        test, target = manipulate_train(chunk_read(test_path,prev,prev+20000), categories)
         test = implement(test, test_song, test_members)
         test = test.drop(['id'], axis=1)
         target = target.reset_index(drop=True)
@@ -317,7 +320,7 @@ def test_them(mlp, maping, listing, max_length, categories, city_list, registrat
         score = correct(prediction, target)
         prediction = pd.DataFrame(prediction)
         file_save(prediction, 'Score.h5')
-        prev = prev + 10000
+        prev = prev + 20000
         loading_bar_test(i, score)
         i = i + 1
     test_members = manipulate_member(chunk_read(test_members_path, prev, 2556789), city_list, registration_list,
